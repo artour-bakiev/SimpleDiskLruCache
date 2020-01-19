@@ -4,13 +4,13 @@ import java.io.*
 import java.util.*
 import java.util.concurrent.Executors
 
-internal open class DiskLruCache(
+class DiskLruCache(
     private val workingDirectory: File,
     private val store: Store,
-    maxDiskStorageSpaceInBytes: Int
+    private val maxDiskStorageSpaceInBytes: Long
 ) {
 
-    private val diskStorageLruCache = FileLruCache(maxDiskStorageSpaceInBytes)
+    private lateinit var diskStorageLruCache: FileLruCache
     private val initializationLock = Object()
     @Volatile
     private var initializationComplete = false
@@ -64,7 +64,7 @@ internal open class DiskLruCache(
 
     fun close() = store.close()
 
-    inner class WriterInternal(private val directory: File, private val key: String) : Writer {
+    private inner class WriterInternal(private val directory: File, private val key: String) : Writer {
 
         private var file: File? = null
         private var successful = false
@@ -135,7 +135,7 @@ internal open class DiskLruCache(
         }
     }
 
-    class ReaderInternal internal constructor(private val entry: Entry) : Reader {
+    private class ReaderInternal constructor(private val entry: Entry) : Reader {
 
         init {
             entry.startReading()
@@ -168,7 +168,7 @@ internal open class DiskLruCache(
             store.removeEntry(key)
         }
 
-        store.addEntry(key, entry.fileName, entry.length)
+        store.addEntry(key, entry)
         diskStorageLruCache.put(key, entry)
     }
 
@@ -180,7 +180,10 @@ internal open class DiskLruCache(
             workingDirectory.mkdir()
         }
 
-        store.readEntriesInto(diskStorageLruCache)
+        val temp = EntryLruCache(maxDiskStorageSpaceInBytes)
+        store.readAll(temp)
+        store.init(temp.entries())
+        diskStorageLruCache = FileLruCache(temp, store)
 
         synchronized(initializationLock) {
             initializationComplete = true
@@ -188,17 +191,13 @@ internal open class DiskLruCache(
         }
     }
 
-    private inner class FileLruCache(maxDiskStorageSpace: Int) : LruCache<String, Entry>(maxDiskStorageSpace) {
+    private class FileLruCache(other: EntryLruCache, private val store: Store) : EntryLruCache(other) {
 
-        override fun entryRemoved(evicted: Boolean, key: String, oldValue: Entry, newValue: Entry?) {
-            // The method is called either from SimpleDiskLruCache::put or
-            // from SimpleDiskLruCache::remove so no synchronization is required
-            oldValue.let {
-                it.deleteFile()
-                store.removeEntry(key)
-            }
+        override fun onEntryRemoved(evicted: Boolean, key: String, oldValue: Entry, newValue: Entry?) {
+            // The method is called either from DiskLruCache::put or
+            // from DiskLruCache::remove so no synchronization is required
+            oldValue.deleteFile()
+            store.removeEntry(key)
         }
-
-        override fun sizeOf(key: String, value: Entry): Int = value.length.toInt()
     }
 }

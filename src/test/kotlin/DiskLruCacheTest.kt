@@ -37,8 +37,26 @@ class DiskLruCacheTest {
 
         cache.read("A").`should be equal to`(sampleBuffer)
         val lru = store.read()
-        lru.size() `should be equal to` 1
+        lru.size() `should be equal to` 20
         lru["A"].`should not be null`()
+    }
+
+    @Test
+    fun `should properly handle reopening`() {
+        val cache = createDiskLruCache(store, directory, 60)
+        val sampleBufferForKeyA = ByteArray(20) { n -> (n * 2).toByte() }
+        cache.write("A").flush(sampleBufferForKeyA)
+        val sampleBufferForKeyB = ByteArray(30) { n -> (n * 3).toByte() }
+        cache.write("B").flush(sampleBufferForKeyB)
+        cache.close()
+
+        val cache2 = createDiskLruCache(store, directory, 60)
+        cache2.read("A").`should be equal to`(sampleBufferForKeyA)
+        cache2.read("B").`should be equal to`(sampleBufferForKeyB)
+        val lru = store.read()
+        lru.size() `should be equal to` 50
+        lru["A"].`should not be null`()
+        lru["B"].`should not be null`()
     }
 
     @Test
@@ -60,7 +78,7 @@ class DiskLruCacheTest {
         cache.read("A").`should be null`()
         cache.read("B").`should be equal to`(sampleBufferForKeyB)
         val lru = store.read()
-        lru.size() `should be equal to` 1
+        lru.size() `should be equal to` 30
         lru["A"].`should be null`()
         lru["B"].`should not be null`()
     }
@@ -80,25 +98,19 @@ class DiskLruCacheTest {
 
         cache1.close()
         val cache2 = createDiskLruCache(store, directory, 49)
-        val keyAFound = cache2.read(keyA) != null
-        val keyBFound = cache2.read(keyB) != null
-        keyAFound `should not be equal to` keyBFound
-        cache2.read(keyA)?.`should be equal to`(sampleBufferA)
-        cache2.read(keyB)?.`should be equal to`(sampleBufferB)
-        cache2.read(keyA) `should not equal` cache2.read(keyB)
+        cache2.read(keyA).`should be null`()
+        cache2.read(keyB).`should be equal to`(sampleBufferB)
         val lru = store.read()
-        lru.size() `should be equal to` 1
-        val lruAFound = lru[keyA] != null
-        val lruBFound = lru[keyB] != null
-        lruAFound `should be equal to` keyAFound
-        lruBFound `should be equal to` keyBFound
+        lru.size() `should be equal to` 5
+        lru[keyA].`should be null`()
+        lru[keyB].`should not be null`()
     }
 
     @Test
     fun `should handle monkey multithreading test`() {
         val numberOfThreads = 100
         val singleBufferSize = 20
-        val cache = createDiskLruCache(store, directory, numberOfThreads * singleBufferSize)
+        val cache = createDiskLruCache(store, directory, numberOfThreads * singleBufferSize.toLong())
         val threads = mutableListOf<Thread>()
         val r = Random()
         val errors = Collections.synchronizedList(mutableListOf<String>())
@@ -125,26 +137,29 @@ class DiskLruCacheTest {
         errors.`should be empty`()
     }
 
-    private fun createDiskLruCache(store: Store, directory: File, maxDiskStorageSpaceInBytes: Int): DiskLruCache =
+    private fun createDiskLruCache(store: Store, directory: File, maxDiskStorageSpaceInBytes: Long): DiskLruCache =
         DiskLruCache(directory, store, maxDiskStorageSpaceInBytes)
 
     private fun createStore(): Store = object : Store {
         private val map: MutableMap<String, Entry> = mutableMapOf()
 
-        override fun readEntriesInto(lruCache: LruCache<String, Entry>) {
+        override fun readAll(lruCache: EntryLruCache) =
             map.forEach { (key, entry) -> lruCache.put(key, entry) }
+
+        override fun init(entries: Iterator<Map.Entry<String, Entry>>) {
+            map.clear()
+            entries.forEach { map[it.key] = it.value }
         }
 
         override fun removeEntry(key: String) {
             map.remove(key)
         }
 
-        override fun addEntry(key: String, fileName: String, length: Long) {
-            map[key] = Entry(fileName, length)
+        override fun addEntry(key: String, entry: Entry) {
+            map[key] = entry
         }
 
         override fun close() = Unit
-
     }
 
     private fun Writer.flush(buffer: ByteArray) = use {
@@ -165,9 +180,9 @@ class DiskLruCacheTest {
         }
     }
 
-    private fun Store.read(): LruCache<String, Entry> {
-        val lruCache = LruCache<String, Entry>(2_000_000_000)
-        readEntriesInto(lruCache)
+    private fun Store.read(): EntryLruCache {
+        val lruCache = EntryLruCache(2_000_000_000)
+        readAll(lruCache)
         return lruCache
     }
 }

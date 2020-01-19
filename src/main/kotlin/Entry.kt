@@ -2,7 +2,7 @@ package bakiev.artour.simpledisklrucache
 
 import java.io.File
 
-internal data class Entry(val fileName: String, val length: Long) {
+data class Entry(val fileName: String, val length: Long) {
 
     private var readers = 0
     private var deleteFile = false

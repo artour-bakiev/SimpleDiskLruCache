@@ -2,94 +2,65 @@ package bakiev.artour.simpledisklrucache
 
 import java.util.*
 
-internal open class LruCache<K, V>(maxSize: Int) {
-    private val map: LinkedHashMap<K, V>
-    private var size: Int = 0
-    private var maxSize: Int = 0
-    private var putCount: Int = 0
-    private var createCount: Int = 0
-    private var evictionCount: Int = 0
-    private var hitCount: Int = 0
-    private var missCount: Int = 0
+abstract class LruCache<K, V> private constructor(
+    private val map: LinkedHashMap<K, V>,
+    private val maxSize: Long,
+    private var currentSize: Long
+) {
+
+    constructor(maxSize: Long) : this(LinkedHashMap<K, V>(0, 0.75f, true), maxSize, 0)
+
+    constructor(other: LruCache<K, V>) : this(other.map, other.maxSize, other.currentSize)
 
     init {
         require(maxSize > 0) { "maxSize <= 0" }
-
-        this.maxSize = maxSize
-
-        map = LinkedHashMap(0, 0.75f, true)
     }
 
-    fun resize(maxSize: Int) {
-        require(maxSize > 0) { "maxSize <= 0" }
+    operator fun get(key: K): V? = map[key]
 
-        this.maxSize = maxSize
-
-        trimToSize(maxSize)
-    }
-
-    operator fun get(key: K): V? {
-        if (key == null) {
-            throw NullPointerException("key == null")
-        } else {
-            var mapValue = map[key]
-            if (mapValue != null) {
-                ++hitCount
-                return mapValue
-            }
-
-            ++missCount
-
-            val createdValue: V? = null
-            if (createdValue == null) {
-                return null
-            } else {
-                ++createCount
-                mapValue = map.put(key, createdValue)
-                if (mapValue != null) {
-                    map[key] = mapValue
-                } else {
-                    size += safeSizeOf(key, createdValue)
-                }
-
-                return if (mapValue != null) {
-                    entryRemoved(false, key, createdValue, mapValue)
-                    mapValue
-                } else {
-                    trimToSize(maxSize)
-                    createdValue
-                }
-            }
-        }
-    }
+    fun entries(): Iterator<Map.Entry<K, V>> = map.entries.iterator()
 
     fun put(key: K, value: V): V? {
-        if (key != null && value != null) {
-            ++putCount
-            size += safeSizeOf(key, value)
-            val previous = map.put(key, value)
-            if (previous != null) {
-                size -= safeSizeOf(key, previous)
-            }
-
-            if (previous != null) {
-                entryRemoved(false, key, previous, value)
-            }
-
-            trimToSize(maxSize)
-            return previous
-        } else {
-            throw NullPointerException("key == null || value == null")
+        currentSize += safeSizeOf(key, value)
+        val previous = map.put(key, value)
+        if (previous != null) {
+            currentSize -= safeSizeOf(key, previous)
         }
+
+        if (previous != null) {
+            onEntryRemoved(false, key, previous, value)
+        }
+
+        trimToSize(maxSize)
+        return previous
     }
 
-    private fun trimToSize(maxSize: Int) {
+    fun remove(key: K): V? {
+        val previous = map.remove(key)
+        if (previous != null) {
+            currentSize -= safeSizeOf(key, previous)
+        }
+
+        if (previous != null) {
+            onEntryRemoved(false, key, previous, null)
+        }
+
+        return previous
+    }
+
+    fun size(): Long = currentSize
+
+    abstract fun sizeOf(key: K, value: V): Long
+
+    protected open fun onEntryRemoved(evicted: Boolean, key: K, oldValue: V, newValue: V?) {}
+
+    private fun trimToSize(maxSize: Long) {
         while (true) {
-            if (size < 0 || map.isEmpty() && size != 0) {
+            if (currentSize < 0 || map.isEmpty() && currentSize != 0L) {
                 throw IllegalStateException(javaClass.name + ".sizeOf() is reporting inconsistent results!")
             }
 
-            if (size <= maxSize || map.isEmpty()) {
+            if (currentSize <= maxSize || map.isEmpty()) {
                 return
             }
 
@@ -97,33 +68,13 @@ internal open class LruCache<K, V>(maxSize: Int) {
             val key = toEvict.key
             val value = toEvict.value
             map.remove(key)
-            size -= safeSizeOf(key, value)
-            ++evictionCount
+            currentSize -= safeSizeOf(key, value)
 
-            entryRemoved(true, key, value, null)
+            onEntryRemoved(true, key, value, null)
         }
     }
 
-    fun remove(key: K): V? {
-        if (key == null) {
-            throw NullPointerException("key == null")
-        } else {
-            val previous = map.remove(key)
-            if (previous != null) {
-                size -= safeSizeOf(key, previous)
-            }
-
-            if (previous != null) {
-                entryRemoved(false, key, previous, null)
-            }
-
-            return previous
-        }
-    }
-
-    protected open fun entryRemoved(evicted: Boolean, key: K, oldValue: V, newValue: V?) {}
-
-    private fun safeSizeOf(key: K, value: V): Int {
+    private fun safeSizeOf(key: K, value: V): Long {
         val result = sizeOf(key, value)
         return if (result < 0) {
             throw IllegalStateException("Negative size: $key=$value")
@@ -132,56 +83,5 @@ internal open class LruCache<K, V>(maxSize: Int) {
         }
     }
 
-    protected open fun sizeOf(key: K, value: V): Int {
-        return 1
-    }
-
-    fun evictAll() {
-        trimToSize(-1)
-    }
-
-    fun size(): Int {
-        return size
-    }
-
-    fun maxSize(): Int {
-        return maxSize
-    }
-
-    fun hitCount(): Int {
-        return hitCount
-    }
-
-    fun missCount(): Int {
-        return missCount
-    }
-
-    fun createCount(): Int {
-        return createCount
-    }
-
-    fun putCount(): Int {
-        return putCount
-    }
-
-    fun evictionCount(): Int {
-        return evictionCount
-    }
-
-    fun snapshot(): Map<K, V> {
-        return LinkedHashMap(map)
-    }
-
-    override fun toString(): String {
-        val accesses = hitCount + missCount
-        val hitPercent = if (accesses != 0) 100 * hitCount / accesses else 0
-        return String.format(
-            Locale.US,
-            "LruCache[maxSize=%d,hits=%d,misses=%d,hitRate=%d%%]",
-            maxSize,
-            hitCount,
-            missCount,
-            hitPercent
-        )
-    }
+    override fun toString(): String = "LruCache[maxSize=$maxSize, size=$currentSize]"
 }
