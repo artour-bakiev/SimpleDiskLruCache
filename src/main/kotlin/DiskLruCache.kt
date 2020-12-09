@@ -4,6 +4,9 @@ import java.io.*
 import java.util.*
 import java.util.concurrent.Executors
 
+/**
+ * DiskLruCache - main interface
+ */
 class DiskLruCache(
     private val workingDirectory: File,
     private val store: Store,
@@ -81,7 +84,7 @@ class DiskLruCache(
             if (!successful) file.delete()
         }
 
-        private inner class ProxyOutputStream internal constructor(
+        private inner class ProxyOutputStream constructor(
             out: OutputStream,
             private val file: File
         ) : FilterOutputStream(out) {

@@ -117,7 +117,7 @@ class DiskLruCacheTest {
         val buffers =
             MutableList(numberOfThreads) { n -> ByteArray(singleBufferSize) { n.toByte() } }
         for (n in 0 until numberOfThreads) {
-            val t = Thread(Runnable {
+            val t = Thread {
                 try {
                     Thread.sleep(abs(r.nextLong()) % 500)
                     cache.write(n.toString()).flush(buffers[n])
@@ -126,7 +126,7 @@ class DiskLruCacheTest {
                 } catch (t: Throwable) {
                     errors.add(t.message)
                 }
-            })
+            }
             threads.add(t)
             t.start()
         }
